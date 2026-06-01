@@ -1,7 +1,13 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 
-	let { currentRoute = $derived($page.url.pathname) } = $props();
+	let { user, open, onClose } = $props<{
+		user: { name: string; role: string } | null;
+		open: boolean;
+		onClose: () => void;
+	}>();
+
+	let currentRoute = $derived($page.url.pathname);
 
 	const adminLinks = [
 		{ href: '/dashboard', label: 'Dashboard', icon: '📊' },
@@ -17,12 +23,6 @@
 		{ href: '/products', label: 'Almacén', icon: '📦' },
 		{ href: '/invoices', label: 'Mis Facturas', icon: '🧾' }
 	];
-
-	let { user, open, onClose } = $props<{
-		user: { name: string; role: string } | null;
-		open: boolean;
-		onClose: () => void;
-	}>();
 
 	const links = $derived(user?.role === 'admin' ? adminLinks : cajeroLinks);
 
