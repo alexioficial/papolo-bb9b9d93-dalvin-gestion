@@ -7,21 +7,9 @@ import type { RequestHandler } from './$types';
 /**
  * Endpoint para seed de datos de prueba.
  * GET: Ejecuta seed si no hay datos, o fuerza si force=true
- * Solo accesible por admin o en desarrollo (sin auth requirement en dev)
+ * Permitido sin auth en primer uso (DB vacia)
  */
 export const GET: RequestHandler = async ({ locals, url }) => {
-	// En producción, requiere admin
-	if (process.env.NODE_ENV === 'production') {
-		try {
-			requireAuth(locals);
-			if (locals.user?.role !== 'admin') {
-				return json({ error: 'Se requieren permisos de administrador' }, { status: 403 });
-			}
-		} catch {
-			return json({ error: 'No autorizado' }, { status: 401 });
-		}
-	}
-
 	const force = url.searchParams.get('force') === 'true';
 
 	try {
@@ -30,6 +18,16 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 		if (!force) {
 			const userCount = await db.collection('users').countDocuments();
 			if (userCount > 0) {
+				// Ya hay datos — requiere admin para reseed
+				try {
+					requireAuth(locals);
+					if (locals.user?.role !== 'admin') {
+						return json({ error: 'Se requieren permisos de administrador' }, { status: 403 });
+					}
+				} catch {
+					return json({ error: 'No autorizado' }, { status: 401 });
+				}
+
 				return json({
 					message: 'Los datos ya existen. Usa ?force=true para resetear (borra todo primero).',
 					seeded: false
@@ -37,7 +35,17 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 			}
 		}
 
+		// Si force=true, requiere auth admin
 		if (force) {
+			try {
+				requireAuth(locals);
+				if (locals.user?.role !== 'admin') {
+					return json({ error: 'Se requieren permisos de administrador' }, { status: 403 });
+				}
+			} catch {
+				return json({ error: 'No autorizado' }, { status: 401 });
+			}
+
 			// Limpiar colecciones
 			await db.collection('users').deleteMany({});
 			await db.collection('sessions').deleteMany({});
