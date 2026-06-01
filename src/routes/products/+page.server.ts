@@ -6,10 +6,8 @@ import type { Product, Category, PaginatedResult } from '$lib/types';
 
 export const load: PageServerLoad = async ({ url, locals }) => {
 	const user = requireAuth(locals);
-
 	const db = await getDb();
 
-	// Query params
 	const search = url.searchParams.get('q') || '';
 	const categoryId = url.searchParams.get('category') || '';
 	const lowStock = url.searchParams.get('lowStock') === 'true';
@@ -17,81 +15,61 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	const limit = Math.min(100, Math.max(1, parseInt(url.searchParams.get('limit') || '20', 10)));
 	const skip = (page - 1) * limit;
 
-	// Build filter
-	const filter: Record<string, unknown> = {};
+	try {
+		// Build pipeline stages
+		const pipeline: Record<string, unknown>[] = [];
 
-	if (categoryId) {
-		try {
-			filter.categoryId = new ObjectId(categoryId);
-		} catch {
-			// Si no es un ObjectId válido, buscamos por nombre de categoría
-			filter.categoryId = categoryId;
+		// Match stage
+		const match: Record<string, unknown> = {};
+
+		if (categoryId) {
+			try {
+				match.categoryId = new ObjectId(categoryId);
+			} catch {
+				match.categoryId = categoryId;
+			}
 		}
-	}
 
-	if (lowStock) {
-		filter.$expr = { $lt: ['$stock', '$minStock'] };
-	}
+		if (lowStock) {
+			match.$expr = { $lt: ['$stock', '$minStock'] };
+		}
 
-	if (search) {
-		try {
-			// Intentar $text search primero
-			filter.$text = { $search: search };
-		} catch {
-			// Fallback a $regex
-			filter.$or = [
+		if (search) {
+			match.$or = [
 				{ name: { $regex: search, $options: 'i' } },
 				{ sku: { $regex: search, $options: 'i' } },
 				{ description: { $regex: search, $options: 'i' } }
 			];
 		}
-	}
 
-	// Si usamos $text, no podemos mezclar con $or fácilmente, así que re-hacemos
-	let finalFilter: Record<string, unknown> = { ...filter };
-	if (search && !filter.$text) {
-		finalFilter.$or = [
-			{ name: { $regex: search, $options: 'i' } },
-			{ sku: { $regex: search, $options: 'i' } },
-			{ description: { $regex: search, $options: 'i' } }
-		];
-	} else if (search && filter.$text) {
-		finalFilter = { $text: { $search: search } };
-		if (categoryId) {
-			try {
-				finalFilter.categoryId = new ObjectId(categoryId);
-			} catch {
-				finalFilter.categoryId = categoryId;
-			}
+		if (Object.keys(match).length > 0) {
+			pipeline.push({ $match: match });
 		}
-		if (lowStock) {
-			finalFilter.$expr = { $lt: ['$stock', '$minStock'] };
-		}
+
+		// Sort and paginate
+		pipeline.push({ $sort: { createdAt: -1 } });
+		pipeline.push({ $skip: skip });
+		pipeline.push({ $limit: limit });
+
+		// Run count and find in parallel
+		const [products, total, categories] = await Promise.all([
+			db.collection('products').aggregate(pipeline).toArray() as Promise<Product[]>,
+			db.collection('products').countDocuments(match),
+			db.collection('categories').find().sort({ name: 1 }).toArray() as Promise<Category[]>
+		]);
+
+		const totalPages = Math.max(1, Math.ceil(total / limit));
+
+		const result: PaginatedResult<Product> = {
+			items: products as Product[],
+			total,
+			page,
+			totalPages
+		};
+
+		return { products: result, categories, user };
+	} catch (err) {
+		console.error('Error loading products:', err);
+		throw new Error('Error al cargar productos');
 	}
-
-	const [total, products, categories] = await Promise.all([
-		db.collection('products').countDocuments(finalFilter),
-		db.collection('products')
-			.find(finalFilter)
-			.sort({ createdAt: -1 })
-			.skip(skip)
-			.limit(limit)
-			.toArray() as Promise<Product[]>,
-		db.collection('categories').find().sort({ name: 1 }).toArray() as Promise<Category[]>
-	]);
-
-	const totalPages = Math.max(1, Math.ceil(total / limit));
-
-	const result: PaginatedResult<Product> = {
-		items: products.map(p => ({ ...p, _id: p._id })),
-		total,
-		page,
-		totalPages
-	};
-
-	return {
-		products: result,
-		categories,
-		user
-	};
 };
